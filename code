@@ -1,0 +1,160 @@
+#include <esp_camera.h>
+#include <WiFi.h>
+#include <Arduino.h>
+#include <DHT.h>
+#include <TensorFlowLite.h>
+#include "camera_pins.h"
+
+// DHT Sensor
+#define DHTPIN 4  // Pin for DHT11 data
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// WiFi credentials (Optional if needed for sending data)
+const char* ssid = "your_SSID";
+const char* password = "your_PASSWORD";
+
+// AI model (TensorFlow Lite model)
+#include "object_detection_model.h"  // Include your trained model here
+
+// Battery monitoring (Optional)
+#define BATTERY_PIN 35  // Pin for monitoring battery voltage
+
+// Object detection
+tflite::MicroInterpreter* interpreter;
+TfLiteTensor* input;
+TfLiteTensor* output;
+
+// Initialize ESP32-CAM
+void setupCamera() {
+  camera_config_t config;
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  
+  if (psramFound()) {
+    config.frame_size = FRAMESIZE_VGA;
+    config.jpeg_quality = 10;
+    config.fb_count = 2;
+  } else {
+    config.frame_size = FRAMESIZE_CIF;
+    config.jpeg_quality = 12;
+    config.fb_count = 1;
+  }
+  
+  // Initialize the camera
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) {
+    Serial.printf("Camera init failed with error 0x%x", err);
+    return;
+  }
+}
+
+// Initialize DHT sensor
+void setupDHT() {
+  dht.begin();
+}
+
+// Battery monitoring (Optional)
+float readBatteryVoltage() {
+  int sensorValue = analogRead(BATTERY_PIN);
+  float voltage = sensorValue * (3.3 / 4095.0) * 2;  // Adjust as needed
+  return voltage;
+}
+
+// Function to capture image from ESP32-CAM
+camera_fb_t* captureImage() {
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Camera capture failed");
+    return nullptr;
+  }
+  return fb;
+}
+
+// Load and process image for object detection
+void runObjectDetection(camera_fb_t* fb) {
+  // Load image into TensorFlow Lite input tensor
+  input = interpreter->input(0);
+  
+  // Preprocess and resize image
+  // TODO: Implement image preprocessing based on model input requirements
+
+  // Invoke the interpreter to perform object detection
+  TfLiteStatus invoke_status = interpreter->Invoke();
+  if (invoke_status != kTfLiteOk) {
+    Serial.println("Failed to invoke TFLite interpreter");
+    return;
+  }
+
+  // Process detection results
+  output = interpreter->output(0);
+  // TODO: Implement output processing (e.g., parsing detected objects, confidence scores, etc.)
+}
+
+// Setup WiFi (Optional)
+void setupWiFi() {
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+}
+
+// Main setup function
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize components
+  setupCamera();
+  setupDHT();
+  setupWiFi();
+  
+  // Load the TensorFlow Lite model
+  tflite::MicroErrorReporter error_reporter;
+  tflite::AllOpsResolver resolver;
+  const tflite::Model* model = tflite::GetModel(object_detection_model);
+  tflite::MicroInterpreter static_interpreter(model, resolver, tensor_arena, kTensorArenaSize, &error_reporter);
+  interpreter = &static_interpreter;
+  interpreter->AllocateTensors();
+}
+
+// Main loop function
+void loop() {
+  // Capture image
+  camera_fb_t *image = captureImage();
+  if (image) {
+    runObjectDetection(image);
+    esp_camera_fb_return(image);
+  }
+
+  // Read DHT11 sensor
+  float temp = dht.readTemperature();
+  float humidity = dht.readHumidity();
+  Serial.printf("Temperature: %.2f °C, Humidity: %.2f %%\n", temp, humidity);
+
+  // Read battery voltage (Optional)
+  float batteryVoltage = readBatteryVoltage();
+  Serial.printf("Battery Voltage: %.2f V\n", batteryVoltage);
+
+  delay(5000);  // Delay for 5 seconds before next loop
+}
